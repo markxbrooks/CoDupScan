@@ -26,8 +26,9 @@ Clone and run directly:
 ```bash
 git clone https://github.com/markxbrooks/codupscan.git
 python codupscan/codupscan.py ../ElMo/elmo --skip-dir test
+```
 
-
+```bash
 python codupscan/codupscan.py --help                             
 usage: codupscan.py [-h] [-n LINES] [-m MIN_OCCURRENCES] [-e EXTENSIONS] [--no-normalize] [--tokens] [--json] [-q] [--skip-dir NAME] [--no-filter-imports] [--no-filter-whitespace]
                     [path]
@@ -52,3 +53,4 @@ options:
   --no-filter-imports   Include import/from lines in hashes (default: blank them for .py files)
   --no-filter-whitespace
                         Do not skip n-grams that have fewer than 2 non-blank lines (default: skip mostly-whitespace windows)
+```
