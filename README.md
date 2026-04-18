@@ -25,5 +25,4 @@ Clone and run directly:
 
 ```bash
 git clone https://github.com/markxbrooks/codupscan.git
-cd codupscan
-chmod +x codupscan.py
+python codupscan/codupscan.py ../ElMo/elmo --skip-dir test
