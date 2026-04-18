@@ -7,6 +7,8 @@ Features:
 - Generator-based n-grams
 - Overlap merging (maximal regions)
 - Optional token normalization (Python-aware)
+- Optional blanking of import/from lines for .py (default on; preserves line numbers)
+- Optional skip of n-grams with too few non-blank lines (``filter_whitespace``; default on)
 - JSON output support
 - Sorted by severity
 """
@@ -20,6 +22,32 @@ from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
 from typing import Iterator
+
+
+# ----------------------------
+# Import filtering (preserve line numbers for reporting)
+# ----------------------------
+
+
+def _line_without_comment(line: str) -> str:
+    return line.split("#", 1)[0].strip()
+
+
+def is_import_line(line: str) -> bool:
+    """True for standard single-line ``import`` / ``from … import`` statements."""
+    s = _line_without_comment(line)
+    if not s:
+        return False
+    if s.startswith("import "):
+        return True
+    if s.startswith("from "):
+        return " import " in s or s.endswith(" import")
+    return False
+
+
+def blank_import_lines(lines: list[str]) -> list[str]:
+    """Replace import lines with empty strings (same length list; stable line indices)."""
+    return ["" if is_import_line(l) else l for l in lines]
 
 
 # ----------------------------
@@ -84,12 +112,18 @@ def extract_ngrams(
     n: int,
     normalize: bool,
     token_mode: bool,
+    filter_whitespace: bool = True,
 ) -> Iterator[tuple[int, int, str]]:
     """
     Yield (start_line, end_line, block_string)
     """
     for i in range(len(lines) - n + 1):
         block = lines[i : i + n]
+
+        if filter_whitespace:
+            substantive = sum(1 for ln in block if ln.strip())
+            if substantive < 2:
+                continue
 
         if token_mode:
             block_str = normalize_tokens("\n".join(block))
@@ -116,6 +150,8 @@ def find_duplicates(
     normalize: bool,
     token_mode: bool,
     exclude_dirs: set[str],
+    filter_imports: bool = True,
+    filter_whitespace: bool = True,
 ) -> list[DuplicateBlock]:
 
     index: dict[str, DuplicateBlock] = {}
@@ -131,8 +167,15 @@ def find_duplicates(
         except OSError:
             continue
 
+        if filter_imports and path.suffix == ".py":
+            lines = blank_import_lines(lines)
+
         for start, end, block_str in extract_ngrams(
-            lines, block_size, normalize, token_mode
+            lines,
+            block_size,
+            normalize,
+            token_mode,
+            filter_whitespace,
         ):
             h = hashlib.md5(block_str.encode()).hexdigest()
 
@@ -202,7 +245,17 @@ def main():
         description="Find duplicated code blocks (stdlib-only)"
     )
     parser.add_argument("path", nargs="?", default=".")
-    parser.add_argument("-n", "--block-size", type=int, default=4)
+    parser.add_argument(
+        "-n",
+        "--block-size",
+        type=int,
+        default=8,
+        metavar="LINES",
+        help=(
+            "Contiguous lines per n-gram (and per reported block). "
+            "Larger values ignore short boilerplate (e.g. import headers). Default: %(default)s"
+        ),
+    )
     parser.add_argument("-m", "--min-occurrences", type=int, default=2)
     parser.add_argument("-e", "--extensions", default=".py")
     parser.add_argument("--no-normalize", action="store_true")
@@ -210,6 +263,33 @@ def main():
                         help="Use Python token-based normalization")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("-q", "--quiet", action="store_true")
+    parser.add_argument(
+        "--skip-dir",
+        action="append",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Skip any file whose path contains a directory component NAME "
+            "(repeatable). Names may be comma-separated. "
+            "Example: --skip-dir test --skip-dir tests,legacy_root"
+        ),
+    )
+    parser.set_defaults(filter_imports=True, filter_whitespace=True)
+    parser.add_argument(
+        "--no-filter-imports",
+        dest="filter_imports",
+        action="store_false",
+        help="Include import/from lines in hashes (default: blank them for .py files)",
+    )
+    parser.add_argument(
+        "--no-filter-whitespace",
+        dest="filter_whitespace",
+        action="store_false",
+        help=(
+            "Do not skip n-grams that have fewer than 2 non-blank lines "
+            "(default: skip mostly-whitespace windows)"
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -218,7 +298,21 @@ def main():
         root = root.parent
 
     extensions = tuple(ext.strip() for ext in args.extensions.split(","))
-    exclude_dirs = {"__pycache__", ".git", "venv", ".venv", "node_modules", "build", "doc"}
+    exclude_dirs: set[str] = {
+        "__pycache__",
+        ".git",
+        "venv",
+        ".venv",
+        "node_modules",
+        "build",
+        "doc",
+    }
+    if args.skip_dir:
+        for chunk in args.skip_dir:
+            for raw in chunk.split(","):
+                name = raw.strip().strip("/")
+                if name:
+                    exclude_dirs.add(name)
 
     duplicates = find_duplicates(
         root=root,
@@ -228,6 +322,8 @@ def main():
         normalize=not args.no_normalize,
         token_mode=args.tokens,
         exclude_dirs=exclude_dirs,
+        filter_imports=args.filter_imports,
+        filter_whitespace=args.filter_whitespace,
     )
 
     if args.json:
