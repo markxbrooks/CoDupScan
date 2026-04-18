@@ -1,6 +1,7 @@
 # CoDupScan
 
 ![PicoGL_Mascot](resources/codupscan_logo_600.png)
+
 **Fast, grep-style detection of duplicated code using n-gram indexing.**
 
 `codupscan` is a zero-dependency CLI tool that identifies duplicated code blocks across files using a single-pass hashing strategy. It supports optional normalization (including Python token-aware mode) to detect structural duplication beyond simple text matching.
