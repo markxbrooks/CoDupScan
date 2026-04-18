@@ -24,6 +24,6 @@
 Clone and run directly:
 
 ```bash
-git clone https://github.com/yourusername/codupscan.git
+git clone https://github.com/markxbrooks/codupscan.git
 cd codupscan
 chmod +x codupscan.py
