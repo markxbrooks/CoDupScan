@@ -16,12 +16,13 @@ Features:
 import argparse
 import hashlib
 import json
+import os
 import tokenize
 from collections import defaultdict
 from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
-from typing import Iterator
+from typing import Iterable, Iterator
 
 
 # ----------------------------
@@ -139,29 +140,62 @@ def extract_ngrams(
 
 
 # ----------------------------
+# Target resolution
+# ----------------------------
+
+def iter_source_files(
+    targets: Iterable[Path],
+    extensions: tuple[str, ...],
+    exclude_dirs: set[str],
+) -> Iterator[Path]:
+    """Yield files to scan for *targets*.
+
+    A target that is a file is always scanned, even when its suffix is not in
+    *extensions* or it sits under an excluded directory: naming it explicitly is
+    the request. Directory targets are walked with both filters applied.
+    """
+    for target in targets:
+        if target.is_file():
+            yield target
+            continue
+
+        for path in target.rglob("*"):
+            if not path.is_file() or path.suffix not in extensions:
+                continue
+            if any(part in exclude_dirs for part in path.parts):
+                continue
+            yield path
+
+
+def display_base(targets: list[Path], files: list[Path]) -> Path:
+    """Directory that reported paths are shown relative to."""
+    if len(targets) == 1 and targets[0].is_dir():
+        return targets[0]
+    if not files:
+        return Path.cwd()
+    try:
+        return Path(os.path.commonpath([str(f.parent) for f in files]))
+    except ValueError:
+        return Path.cwd()
+
+
+# ----------------------------
 # Duplicate detection
 # ----------------------------
 
 def find_duplicates(
-    root: Path,
+    files: Iterable[Path],
     block_size: int,
     min_occurrences: int,
-    extensions: tuple[str, ...],
     normalize: bool,
     token_mode: bool,
-    exclude_dirs: set[str],
     filter_imports: bool = True,
     filter_whitespace: bool = True,
 ) -> list[DuplicateBlock]:
 
     index: dict[str, DuplicateBlock] = {}
 
-    for path in root.rglob("*"):
-        if not path.is_file() or path.suffix not in extensions:
-            continue
-        if any(part in exclude_dirs for part in path.parts):
-            continue
-
+    for path in files:
         try:
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
@@ -244,7 +278,17 @@ def main():
     parser = argparse.ArgumentParser(
         description="Find duplicated code blocks (stdlib-only)"
     )
-    parser.add_argument("path", nargs="?", default=".")
+    parser.add_argument(
+        "path",
+        nargs="*",
+        default=[],
+        metavar="PATH",
+        help=(
+            "Files and/or directories to scan (repeatable). "
+            "A named file is scanned on its own; directories are walked. "
+            "Default: current directory"
+        ),
+    )
     parser.add_argument(
         "-n",
         "--block-size",
@@ -293,9 +337,12 @@ def main():
 
     args = parser.parse_args()
 
-    root = Path(args.path).resolve()
-    if root.is_file():
-        root = root.parent
+    targets = [Path(p).resolve() for p in (args.path or ["."])]
+    missing = [t for t in targets if not t.exists()]
+    if missing:
+        parser.error(
+            "path does not exist: " + ", ".join(str(m) for m in missing)
+        )
 
     extensions = tuple(ext.strip() for ext in args.extensions.split(","))
     exclude_dirs: set[str] = {
@@ -314,14 +361,15 @@ def main():
                 if name:
                     exclude_dirs.add(name)
 
+    files = sorted(set(iter_source_files(targets, extensions, exclude_dirs)))
+    root = display_base(targets, files)
+
     duplicates = find_duplicates(
-        root=root,
+        files=files,
         block_size=args.block_size,
         min_occurrences=args.min_occurrences,
-        extensions=extensions,
         normalize=not args.no_normalize,
         token_mode=args.tokens,
-        exclude_dirs=exclude_dirs,
         filter_imports=args.filter_imports,
         filter_whitespace=args.filter_whitespace,
     )
@@ -343,6 +391,9 @@ def main():
         ], indent=2))
         return
 
+    print(f"Scanned {len(files)} file(s) under {root}")
+    print("Reported paths are relative to that directory.")
+
     total_regions = 0
 
     for i, block in enumerate(duplicates, 1):
@@ -360,8 +411,11 @@ def main():
                 print("  | ...")
 
         for occ in block.occurrences:
-            rel = occ.path.relative_to(root)
-            print(f"  {rel}:{occ.start}-{occ.end}")
+            try:
+                shown = occ.path.relative_to(root)
+            except ValueError:
+                shown = occ.path
+            print(f"  {shown}:{occ.start}-{occ.end}")
 
     print(f"\nTotal duplicate regions: {total_regions}")
 
